@@ -40,6 +40,8 @@ import (
 	"sync"
 	"syscall"
 
+    "golang.org/x/net/proxy"
+
 	"git.torproject.org/pluggable-transports/goptlib.git"
 	"git.torproject.org/pluggable-transports/obfs4.git/common/log"
 	"git.torproject.org/pluggable-transports/obfs4.git/transports"
