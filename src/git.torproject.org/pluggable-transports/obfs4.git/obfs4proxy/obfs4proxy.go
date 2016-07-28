@@ -40,7 +40,7 @@ import (
 	"sync"
 	"syscall"
 
-    "golang.org/x/net/proxy"
+	"golang.org/x/net/proxy"
 
 	"git.torproject.org/pluggable-transports/goptlib.git"
 	"git.torproject.org/pluggable-transports/obfs4.git/common/log"
@@ -51,7 +51,6 @@ import (
 const (
 	obfs4proxyVersion = "0.0.7-dev"
 	obfs4proxyLogFile = "obfs4proxy.log"
-	socksAddr         = "127.0.0.1:4891"
 )
 
 var stateDir string
@@ -59,6 +58,11 @@ var termMon *termMonitor
 
 func clientSetup() (launched bool, listeners []net.Listener) {
 	ptClientInfo, err := pt.ClientSetup(transports.Transports())
+	if err != nil {
+		golog.Fatal(err)
+	}
+
+	socksAddr, err := ptGetClientAddr()
 	if err != nil {
 		golog.Fatal(err)
 	}

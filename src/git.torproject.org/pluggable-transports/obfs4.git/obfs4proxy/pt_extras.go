@@ -59,6 +59,14 @@ func ptIsClient() (bool, error) {
 	return false, errors.New("not launched as a managed transport")
 }
 
+func ptGetClientAddr() (string, error) {
+	addrStr := os.Getenv("TOR_PT_CLIENT_ADDR")
+	if addrStr == "" {
+		return "", ptEnvError("TOR_PT_CLIENT_ADDR: failed to get cert")
+	}
+	return addrStr, nil
+}
+
 func ptGetCert() (string, error) {
 	certString := os.Getenv("TOR_PT_CERT")
 	if certString == "" {
