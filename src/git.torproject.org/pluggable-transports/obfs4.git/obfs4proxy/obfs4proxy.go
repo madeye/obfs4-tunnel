@@ -35,17 +35,13 @@ import (
 	"io"
 	golog "log"
 	"net"
-	"net/url"
 	"os"
 	"path"
 	"sync"
 	"syscall"
 
-	"golang.org/x/net/proxy"
-
 	"git.torproject.org/pluggable-transports/goptlib.git"
 	"git.torproject.org/pluggable-transports/obfs4.git/common/log"
-	"git.torproject.org/pluggable-transports/obfs4.git/common/socks5"
 	"git.torproject.org/pluggable-transports/obfs4.git/transports"
 	"git.torproject.org/pluggable-transports/obfs4.git/transports/base"
 )
@@ -53,7 +49,7 @@ import (
 const (
 	obfs4proxyVersion = "0.0.7-dev"
 	obfs4proxyLogFile = "obfs4proxy.log"
-	socksAddr         = "127.0.0.1:0"
+	socksAddr         = "127.0.0.1:4891"
 )
 
 var stateDir string
@@ -65,11 +61,14 @@ func clientSetup() (launched bool, listeners []net.Listener) {
 		golog.Fatal(err)
 	}
 
-	ptClientProxy, err := ptGetProxy()
+	certStr, err := ptGetCert()
 	if err != nil {
 		golog.Fatal(err)
-	} else if ptClientProxy != nil {
-		ptProxyDone()
+	}
+
+	target, err := ptGetTarget()
+	if err != nil {
+		golog.Fatal(err)
 	}
 
 	// Launch each of the client listeners.
@@ -92,8 +91,7 @@ func clientSetup() (launched bool, listeners []net.Listener) {
 			continue
 		}
 
-		go clientAcceptLoop(f, ln, ptClientProxy)
-		pt.Cmethod(name, socks5.Version(), ln.Addr())
+		go clientAcceptLoop(f, ln, certStr, target)
 
 		log.Infof("%s - registered listener: %s", name, ln.Addr())
 
@@ -105,7 +103,7 @@ func clientSetup() (launched bool, listeners []net.Listener) {
 	return
 }
 
-func clientAcceptLoop(f base.ClientFactory, ln net.Listener, proxyURI *url.URL) error {
+func clientAcceptLoop(f base.ClientFactory, ln net.Listener, certStr string, target string) error {
 	defer ln.Close()
 	for {
 		conn, err := ln.Accept()
@@ -115,63 +113,40 @@ func clientAcceptLoop(f base.ClientFactory, ln net.Listener, proxyURI *url.URL) 
 			}
 			continue
 		}
-		go clientHandler(f, conn, proxyURI)
+		go clientHandler(f, conn, certStr, target)
 	}
 }
 
-func clientHandler(f base.ClientFactory, conn net.Conn, proxyURI *url.URL) {
+func clientHandler(f base.ClientFactory, conn net.Conn, certStr string, target string) {
 	defer conn.Close()
 	termMon.onHandlerStart()
 	defer termMon.onHandlerFinish()
 
 	name := f.Transport().Name()
 
-	// Read the client's SOCKS handshake.
-	socksReq, err := socks5.Handshake(conn)
-	if err != nil {
-		log.Errorf("%s - client failed socks handshake: %s", name, err)
-		return
-	}
-	addrStr := log.ElideAddr(socksReq.Target)
+	ptArgs := &pt.Args{}
+	ptArgs.Add("cert", certStr)
+	ptArgs.Add("iat-mode", "0")
 
-	// Deal with arguments.
-	args, err := f.ParseArgs(&socksReq.Args)
+	args, err := f.ParseArgs(ptArgs)
 	if err != nil {
-		log.Errorf("%s(%s) - invalid arguments: %s", name, addrStr, err)
-		socksReq.Reply(socks5.ReplyGeneralFailure)
+		log.Errorf("Unable to parse client args: %v", err)
 		return
 	}
 
-	// Obtain the proxy dialer if any, and create the outgoing TCP connection.
+	// Dial directly
 	dialFn := proxy.Direct.Dial
-	if proxyURI != nil {
-		dialer, err := proxy.FromURL(proxyURI, proxy.Direct)
-		if err != nil {
-			// This should basically never happen, since config protocol
-			// verifies this.
-			log.Errorf("%s(%s) - failed to obtain proxy dialer: %s", name, addrStr, log.ElideError(err))
-			socksReq.Reply(socks5.ReplyGeneralFailure)
-			return
-		}
-		dialFn = dialer.Dial
-	}
-	remote, err := f.Dial("tcp", socksReq.Target, dialFn, args)
+	remote, err := f.Dial("tcp", target, dialFn, args)
 	if err != nil {
-		log.Errorf("%s(%s) - outgoing connection failed: %s", name, addrStr, log.ElideError(err))
-		socksReq.Reply(socks5.ErrorToReplyCode(err))
+		log.Errorf("%s(%s) - outgoing connection failed: %s", name, target, log.ElideError(err))
 		return
 	}
 	defer remote.Close()
-	err = socksReq.Reply(socks5.ReplySucceeded)
-	if err != nil {
-		log.Errorf("%s(%s) - SOCKS reply failed: %s", name, addrStr, log.ElideError(err))
-		return
-	}
 
 	if err = copyLoop(conn, remote); err != nil {
-		log.Warnf("%s(%s) - closed connection: %s", name, addrStr, log.ElideError(err))
+		log.Warnf("%s(%s) - closed connection: %s", name, target, log.ElideError(err))
 	} else {
-		log.Infof("%s(%s) - closed connection", name, addrStr)
+		log.Infof("%s(%s) - closed connection", name, target)
 	}
 
 	return
